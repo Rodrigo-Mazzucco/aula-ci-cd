@@ -9,7 +9,7 @@
 #   VERCEL_PROJECT_ID
 # =============================================================================
 
-name: Pipeline
+name: Pipeline CI/CD - Vercel
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Deploys da mesma branch entram em fila.
+# Deploys da mesma branch entram em fila (sem cancelar o que já está rodando).
 concurrency:
   group: pipeline-${{ github.ref }}
   cancel-in-progress: false
@@ -34,17 +34,17 @@ jobs:
   # ---------------------------------------------------------------------------
   # CI: testes, qualidade e build
   checks:
-    name: Rodar CI antes do deploy
+    name: Testes e build
     uses: ./.github/workflows/ci.yml
 
   # ---------------------------------------------------------------------------
   # PREVIEW: Pull Request
   preview:
     name: Deploy Preview
+    needs: checks
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
-    needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -55,40 +55,32 @@ jobs:
     environment:
       name: preview
 
-    outputs:
-      url: ${{ steps.deploy.outputs.url }}
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout do código
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      - run: npm ci
-
-      - name: Instala a CLI da Vercel
+      - name: Instalar Vercel CLI
         run: npm install --global vercel@latest
 
-      # Diagnóstico seguro: nunca imprime o valor do token.
-      - name: Verificar VERCEL_TOKEN
+      - name: Validar secrets da Vercel
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
-          if [ -z "$VERCEL_TOKEN" ]; then
-            echo "::error::VERCEL_TOKEN está vazio ou indisponível neste job."
-            echo "Confira Settings > Secrets and variables > Actions."
-            exit 1
-          fi
-          echo "VERCEL_TOKEN está configurado."
+          test -n "$VERCEL_TOKEN" || { echo "::error::VERCEL_TOKEN não configurado"; exit 1; }
+          test -n "$VERCEL_ORG_ID" || { echo "::error::VERCEL_ORG_ID não configurado"; exit 1; }
+          test -n "$VERCEL_PROJECT_ID" || { echo "::error::VERCEL_PROJECT_ID não configurado"; exit 1; }
 
-      - name: Baixa configuração do projeto (preview)
+      - name: Baixar configurações do Preview
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: vercel pull --yes --environment=preview --token="$VERCEL_TOKEN"
 
-      - name: Build
+      - name: Build do Preview
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: vercel build --token="$VERCEL_TOKEN"
@@ -100,37 +92,40 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          URL=$(vercel deploy --prebuilt --token="$VERCEL_TOKEN")
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
-          echo "### 🔍 Preview: $URL" >> "$GITHUB_STEP_SUMMARY"
+          DEPLOY_URL=$(vercel deploy --prebuilt --token="$VERCEL_TOKEN")
+          echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+          echo "### 🔍 Preview: $DEPLOY_URL" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Smoke test no preview
+      - name: Smoke test no Preview
         env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           DEPLOY_URL: ${{ steps.deploy.outputs.url }}
+        shell: bash
         run: |
+          set -euo pipefail
           sleep 5
-          curl --fail --silent --show-error --retry 5 --retry-delay 3 \
-            "${DEPLOY_URL}/api/health"
+          vercel curl "$DEPLOY_URL/api/health" --fail --silent --show-error
 
-      - name: Comenta a URL no PR
+      - name: Comentar a URL no PR
         uses: actions/github-script@v7
         env:
           DEPLOY_URL: ${{ steps.deploy.outputs.url }}
         with:
           script: |
+            const sha = context.payload.pull_request.head.sha.slice(0, 7);
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `🚀 **Preview pronto!**\n\n${process.env.DEPLOY_URL}\n\nCommit: \`${context.sha.slice(0, 7)}\``
-            })
+              body: `🚀 **Preview pronto!**\n\n${process.env.DEPLOY_URL}\n\nCommit: \`${sha}\``
+            });
 
   # ---------------------------------------------------------------------------
   # PRODUÇÃO: push na main
   production:
-    name: Deploy Produção
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: Deploy Production
     needs: checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -139,57 +134,55 @@ jobs:
       url: ${{ steps.deploy.outputs.url }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout do código
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      - run: npm ci
-
-      - name: Instala a CLI da Vercel
+      - name: Instalar Vercel CLI
         run: npm install --global vercel@latest
 
-      # Diagnóstico seguro: nunca imprime o valor do token.
-      - name: Verificar VERCEL_TOKEN
+      - name: Validar secrets da Vercel
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
-          if [ -z "$VERCEL_TOKEN" ]; then
-            echo "::error::VERCEL_TOKEN está vazio ou indisponível neste job."
-            echo "Confira Settings > Secrets and variables > Actions."
-            exit 1
-          fi
-          echo "VERCEL_TOKEN está configurado."
+          test -n "$VERCEL_TOKEN" || { echo "::error::VERCEL_TOKEN não configurado"; exit 1; }
+          test -n "$VERCEL_ORG_ID" || { echo "::error::VERCEL_ORG_ID não configurado"; exit 1; }
+          test -n "$VERCEL_PROJECT_ID" || { echo "::error::VERCEL_PROJECT_ID não configurado"; exit 1; }
 
-      - name: Baixa configuração do projeto (produção)
+      - name: Baixar configurações de Production
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
 
-      - name: Build
+      - name: Build de Production
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: vercel build --prod --token="$VERCEL_TOKEN"
 
-      - name: Deploy Produção
+      - name: Deploy Production
         id: deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          URL=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
-          echo "### 🚀 Produção: $URL" >> "$GITHUB_STEP_SUMMARY"
+          DEPLOY_URL=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")
+          echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+          echo "### 🚀 Produção: $DEPLOY_URL" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Smoke test pós-deploy
         env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           DEPLOY_URL: ${{ steps.deploy.outputs.url }}
+        shell: bash
         run: |
+          set -euo pipefail
           sleep 5
-          curl --fail --silent --show-error --retry 5 --retry-delay 3 \
-            "${DEPLOY_URL}/api/health"
-          curl --fail --silent --show-error \
-            "${DEPLOY_URL}/api/hello?name=Deploy" | grep "Olá, Deploy!"
+
+          vercel curl "$DEPLOY_URL/api/health" --fail --silent --show-error
+
+          vercel curl "$DEPLOY_URL/api/hello?name=Deploy" --fail --silent --show-error | grep -F "Olá, Deploy!"
