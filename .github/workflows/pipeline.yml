@@ -1,4 +1,3 @@
-```yaml
 # =============================================================================
 # PIPELINE PRINCIPAL: CI (build + testes) -> CD (deploy na Vercel)
 #   • Pull Request -> deploy de PREVIEW
@@ -194,4 +193,3 @@ jobs:
             "${DEPLOY_URL}/api/health"
           curl --fail --silent --show-error \
             "${DEPLOY_URL}/api/hello?name=Deploy" | grep "Olá, Deploy!"
-```
