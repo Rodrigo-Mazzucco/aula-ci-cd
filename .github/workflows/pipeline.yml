@@ -7,6 +7,9 @@
 #   VERCEL_TOKEN
 #   VERCEL_ORG_ID
 #   VERCEL_PROJECT_ID
+#   VERCEL_AUTOMATION_BYPASS_SECRET
+#     (Vercel > Project Settings > Deployment Protection >
+#      Protection Bypass for Automation)
 # =============================================================================
 
 name: Pipeline CI/CD - Vercel
@@ -70,10 +73,12 @@ jobs:
       - name: Validar secrets da Vercel
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           test -n "$VERCEL_TOKEN" || { echo "::error::VERCEL_TOKEN não configurado"; exit 1; }
           test -n "$VERCEL_ORG_ID" || { echo "::error::VERCEL_ORG_ID não configurado"; exit 1; }
           test -n "$VERCEL_PROJECT_ID" || { echo "::error::VERCEL_PROJECT_ID não configurado"; exit 1; }
+          test -n "$VERCEL_AUTOMATION_BYPASS_SECRET" || { echo "::error::VERCEL_AUTOMATION_BYPASS_SECRET não configurado"; exit 1; }
 
       - name: Baixar configurações do Preview
         env:
@@ -96,18 +101,21 @@ jobs:
           echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
           echo "### 🔍 Preview: $DEPLOY_URL" >> "$GITHUB_STEP_SUMMARY"
 
+      # Sobre o `vercel curl` (testado na CLI 64.5.0):
+      #  - NÃO passe --token: a CLI repassa o flag ao curl ("option --token: is unknown").
+      #  - VERCEL_TOKEN precisa estar no env, senão a CLI aborta ("No existing credentials found").
+      #  - VERCEL_AUTOMATION_BYPASS_SECRET no env é lido pela CLI e enviado como header de bypass.
+      #  - --fail faz o step falhar em HTTP 4xx/5xx.
       - name: Smoke test no Preview
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           DEPLOY_URL: ${{ steps.deploy.outputs.url }}
         shell: bash
         run: |
           set -euo pipefail
           sleep 5
-          vercel curl /api/health \
-            --deployment "$DEPLOY_URL" \
-            --token "$VERCEL_TOKEN" \
-            -- --fail --silent --show-error
+          vercel curl "$DEPLOY_URL/api/health" --fail --silent --show-error
 
       - name: Comentar a URL no PR
         uses: actions/github-script@v7
@@ -151,10 +159,12 @@ jobs:
       - name: Validar secrets da Vercel
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           test -n "$VERCEL_TOKEN" || { echo "::error::VERCEL_TOKEN não configurado"; exit 1; }
           test -n "$VERCEL_ORG_ID" || { echo "::error::VERCEL_ORG_ID não configurado"; exit 1; }
           test -n "$VERCEL_PROJECT_ID" || { echo "::error::VERCEL_PROJECT_ID não configurado"; exit 1; }
+          test -n "$VERCEL_AUTOMATION_BYPASS_SECRET" || { echo "::error::VERCEL_AUTOMATION_BYPASS_SECRET não configurado"; exit 1; }
 
       - name: Baixar configurações de Production
         env:
@@ -177,21 +187,18 @@ jobs:
           echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
           echo "### 🚀 Produção: $DEPLOY_URL" >> "$GITHUB_STEP_SUMMARY"
 
+      # Mesmas regras do smoke test do Preview: sem --token, com VERCEL_TOKEN e
+      # VERCEL_AUTOMATION_BYPASS_SECRET no env, e --fail para falhar em HTTP 4xx/5xx.
       - name: Smoke test pós-deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           DEPLOY_URL: ${{ steps.deploy.outputs.url }}
         shell: bash
         run: |
           set -euo pipefail
           sleep 5
 
-          vercel curl /api/health \
-            --deployment "$DEPLOY_URL" \
-            --token "$VERCEL_TOKEN" \
-            -- --fail --silent --show-error
+          vercel curl "$DEPLOY_URL/api/health" --fail --silent --show-error
 
-          vercel curl '/api/hello?name=Deploy' \
-            --deployment "$DEPLOY_URL" \
-            --token "$VERCEL_TOKEN" \
-            -- --fail --silent --show-error | grep "Olá, Deploy!"
+          vercel curl "$DEPLOY_URL/api/hello?name=Deploy" --fail --silent --show-error | grep -F "Olá, Deploy!"
